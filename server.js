@@ -1,5 +1,6 @@
+const express = require('express');
 const { google } = require('googleapis');
-PORT = 3000
+
 // --- CONFIGURATION ---
 const {
     GOOGLE_CLIENT_ID,
@@ -7,10 +8,23 @@ const {
     GOOGLE_REFRESH_TOKEN,
     YOUTUBE_API_KEY,
     VIDEO_ID_TO_UPDATE,
-    TITLE_PREFIX
+    TITLE_PREFIX,
+    PORT
 } = process.env;
 
-// Update interval: 5 minutes (300,000 ms)
+// Use default port 4000 if not specified
+const port = PORT || 4000;
+
+// --- Express server ---
+const app = express();
+app.get('/', (req, res) => {
+    res.send('YouTube Title Bot is running!');
+});
+app.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
+});
+
+// --- Update interval: 5 minutes ---
 const UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 
 // --- YouTube clients ---
@@ -29,7 +43,6 @@ let lastStats = { views: null, likes: null, comments: null };
 async function performUpdate() {
     console.log(`[${new Date().toISOString()}] Fetching stats...`);
     try {
-        // Fetch statistics + snippet
         const response = await youtubeReadOnly.videos.list({
             part: 'statistics,snippet',
             id: VIDEO_ID_TO_UPDATE,
@@ -62,14 +75,13 @@ async function performUpdate() {
 
         lastStats = { views: formattedViews, likes: formattedLikes, comments: formattedComments };
 
-        const newTitle = `${TITLE_PREFIX} 🎥 ${formattedViews} Views |👍 ${formattedLikes} Likes | 💬 ${formattedComments} Comments`;
+        const newTitle = `${TITLE_PREFIX} 🎥 ${formattedViews} Views | 👍 ${formattedLikes} Likes | 💬 ${formattedComments} Comments`;
 
         if (title === newTitle) {
             console.log('Title already up-to-date. Skipping update.');
             return;
         }
 
-        // Update the video title
         await youtubeReadWrite.videos.update({
             part: 'snippet',
             requestBody: {
@@ -79,7 +91,6 @@ async function performUpdate() {
         });
 
         console.log(`✅ Title updated to: "${newTitle}"`);
-
     } catch (err) {
         console.error('❌ Error during update:', err.message);
     }
@@ -91,6 +102,7 @@ if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN || !YOUT
     process.exit(1);
 }
 
+// --- Start bot ---
 console.log(`YouTube Title Bot starting... updating every ${UPDATE_INTERVAL_MS / 60000} minutes`);
 performUpdate();
 setInterval(performUpdate, UPDATE_INTERVAL_MS);
