@@ -1,3 +1,5 @@
+// ========= START OF FILE: Make sure you copy this line =========
+
 const express = require('express');
 const session = require('express-session');
 const { google } = require('googleapis');
@@ -84,4 +86,92 @@ app.get('/oauth2callback', async (req, res) => {
     try {
         // Exchange the code for access and refresh tokens
         const { tokens } = await oauth2Client.getToken(code);
-        // Store these tokens in the server-side sess
+        // Store these tokens in the server-side session for this user
+        req.session.tokens = tokens;
+        console.log("Successfully authenticated and tokens received.");
+        res.redirect('/');
+    } catch (error) {
+        console.error('Error authenticating with Google:', error);
+        res.status(500).send('Authentication failed! Please try again.');
+    }
+});
+
+/**
+ * @route POST /update-title
+ * @description Handles the form submission to change the video's title.
+ */
+app.post('/update-title', async (req, res) => {
+    // Ensure the user is logged in before proceeding
+    if (!req.session.tokens) {
+        return res.redirect('/');
+    }
+    
+    // Set the credentials on our OAuth client using the tokens from the session
+    oauth2Client.setCredentials(req.session.tokens);
+    
+    // Create an authenticated YouTube API client
+    const youtube = google.youtube({
+        version: 'v3',
+        auth: oauth2Client,
+    });
+
+    const newTitle = req.body.newTitle;
+
+    try {
+        // The YouTube API requires us to send the entire "snippet" object back.
+        // So, first we must fetch the existing snippet.
+        const videoResponse = await youtube.videos.list({
+            part: 'snippet',
+            id: VIDEO_ID,
+        });
+
+        if (videoResponse.data.items.length === 0) {
+            return res.status(404).send('Error: Video not found with that ID.');
+        }
+
+        const videoSnippet = videoResponse.data.items[0].snippet;
+        
+        // Now, we modify the title on the object we just fetched.
+        videoSnippet.title = newTitle;
+        console.log(`Attempting to update video title to: "${newTitle}"`);
+
+        // Finally, send the modified snippet object in an 'update' request.
+        await youtube.videos.update({
+            part: 'snippet',
+            requestBody: {
+                id: VIDEO_ID,
+                snippet: videoSnippet
+            },
+        });
+        
+        console.log("Successfully updated video title.");
+        res.send(`<h1>Success!</h1><p>Video title updated to: "${newTitle}"</p><a href="/">Go Back</a>`);
+
+    } catch (error) {
+        console.error('Error updating video title:', error.response ? error.response.data : error.message);
+        res.status(500).send('An error occurred while updating the video title. Check the server logs on Render for details.');
+    }
+});
+
+/**
+ * @route GET /logout
+ * @description Clears the session to log the user out.
+ */
+app.get('/logout', (req, res) => {
+    req.session.destroy(err => {
+        if (err) {
+            return res.redirect('/');
+        }
+        res.clearCookie('connect.sid'); // The default session cookie name
+        res.redirect('/');
+    });
+});
+
+
+// Start the server
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+    console.log('Ensure all environment variables (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.) are set.');
+});
+
+// ========= END OF FILE: Make sure you copy this line =========
