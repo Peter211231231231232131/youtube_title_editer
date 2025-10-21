@@ -1,87 +1,113 @@
+const https = require('https');
 const { google } = require('googleapis');
-
-// --- CONFIGURATION ---
+PORT = 3000
+// --- CONFIG ---
 const {
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REFRESH_TOKEN,
-    YOUTUBE_API_KEY,
     VIDEO_ID_TO_UPDATE,
     TITLE_PREFIX
 } = process.env;
 
-const UPDATE_INTERVAL_MS = 30 * 1000; // 30 seconds
+const UPDATE_INTERVAL_MS = 30 * 1000;
 
-// --- YouTube clients ---
-// For reading public data (cheap API calls)
-const youtubeReadOnly = google.youtube({
-    version: 'v3',
-    auth: YOUTUBE_API_KEY,
-});
-
-// For writing private data (needs OAuth)
+// --- OAuth client for updating title ---
 const oauth2Client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
 oauth2Client.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
 const youtubeReadWrite = google.youtube({ version: 'v3', auth: oauth2Client });
 
-// --- MAIN FUNCTION ---
+// --- Track last stats ---
+let lastStats = { views: null, likes: null, comments: null };
+
+// --- Fetch YouTube stats (streaming-like) ---
+function fetchYouTubeStatsStreaming(videoId) {
+    return new Promise((resolve, reject) => {
+        const url = `https://www.youtube.com/watch?v=${videoId}`;
+        let buffer = '';
+
+        https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, (res) => {
+            res.on('data', chunk => {
+                buffer += chunk.toString();
+                const match = buffer.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});/);
+                if (match) {
+                    res.destroy(); // Stop downloading further
+                    try {
+                        const data = JSON.parse(match[1]);
+                        const videoDetails = data.videoDetails;
+                        const microformat = data.microformat?.playerMicroformatRenderer;
+                        resolve({
+                            title: videoDetails.title,
+                            views: videoDetails.viewCount,
+                            likes: microformat?.likeCount || 'N/A',
+                            comments: videoDetails.commentCount || 'N/A',
+                            lastEditTime: microformat?.publishDate || 'Unknown'
+                        });
+                    } catch (err) {
+                        reject(err);
+                    }
+                }
+            });
+
+            res.on('error', reject);
+            res.on('end', () => reject(new Error('ytInitialPlayerResponse not found')));
+        }).on('error', reject);
+    });
+}
+
+// --- Main update function ---
 async function performUpdate() {
-    console.log(`[${new Date().toISOString()}] Starting update cycle...`);
+    console.log(`[${new Date().toISOString()}] Fetching stats (streaming)...`);
     try {
-        // --- Step 1: Get video statistics ---
-        const statsResponse = await youtubeReadOnly.videos.list({
-            part: 'statistics,snippet',
-            id: VIDEO_ID_TO_UPDATE,
+        const stats = await fetchYouTubeStatsStreaming(VIDEO_ID_TO_UPDATE);
+
+        const formattedViews = Number(stats.views).toLocaleString();
+        const formattedLikes = stats.likes !== 'N/A' ? Number(stats.likes).toLocaleString() : 'N/A';
+        const formattedComments = stats.comments !== 'N/A' ? Number(stats.comments).toLocaleString() : 'N/A';
+
+        console.log(`Views: ${formattedViews}, Likes: ${formattedLikes}, Comments: ${formattedComments}, Last Edit: ${stats.lastEditTime}`);
+
+        // Only update if anything changed
+        if (
+            lastStats.views === formattedViews &&
+            lastStats.likes === formattedLikes &&
+            lastStats.comments === formattedComments
+        ) {
+            console.log('No changes detected. Skipping update.');
+            return;
+        }
+
+        lastStats = { views: formattedViews, likes: formattedLikes, comments: formattedComments };
+
+        const newTitle = `${TITLE_PREFIX}${formattedViews} Views | ${formattedLikes} Likes | ${formattedComments} Comments`;
+
+        if (stats.title === newTitle) {
+            console.log('Title already matches stats. Skipping update.');
+            return;
+        }
+
+        // Update title
+        await youtubeReadWrite.videos.update({
+            part: 'snippet',
+            requestBody: {
+                id: VIDEO_ID_TO_UPDATE,
+                snippet: { ...stats, title: newTitle }
+            }
         });
 
-        if (!statsResponse.data.items || statsResponse.data.items.length === 0) {
-            throw new Error('Could not find video statistics. Check VIDEO_ID and API_KEY.');
-        }
+        console.log(`✅ Title updated to: "${newTitle}"`);
 
-        const video = statsResponse.data.items[0];
-        const { viewCount, likeCount, commentCount } = video.statistics;
-        const { title, publishedAt } = video.snippet;
-
-        const formattedViews = Number(viewCount).toLocaleString();
-        const formattedLikes = likeCount ? Number(likeCount).toLocaleString() : 'N/A';
-        const formattedComments = commentCount ? Number(commentCount).toLocaleString() : 'N/A';
-        const lastEditTime = publishedAt ? new Date(publishedAt).toLocaleString() : 'Unknown';
-
-        console.log(`Views: ${formattedViews}, Likes: ${formattedLikes}, Comments: ${formattedComments}, Last Edited: ${lastEditTime}`);
-
-        // --- Step 2: Update the title if needed ---
-        const newTitle = `${TITLE_PREFIX}${formattedViews} Views`;
-        if (title !== newTitle) {
-            const snippet = { ...video.snippet, title: newTitle };
-            console.log(`Updating title to: "${newTitle}"`);
-            await youtubeReadWrite.videos.update({
-                part: 'snippet',
-                requestBody: {
-                    id: VIDEO_ID_TO_UPDATE,
-                    snippet,
-                },
-            });
-            console.log('✅ Title updated successfully!');
-        } else {
-            console.log('Title is already up-to-date. Skipping update.');
-        }
-
-    } catch (error) {
-        console.error('❌ Error during update cycle:');
-        if (error.response && error.response.data) {
-            console.error(JSON.stringify(error.response.data.error, null, 2));
-        } else {
-            console.error(error.message);
-        }
+    } catch (err) {
+        console.error('❌ Error during update:', err.message);
     }
 }
 
-// --- VALIDATE CONFIG ---
-if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN || !YOUTUBE_API_KEY || !VIDEO_ID_TO_UPDATE || !TITLE_PREFIX) {
+// --- Validate config ---
+if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN || !VIDEO_ID_TO_UPDATE || !TITLE_PREFIX) {
     console.error('FATAL ERROR: Missing required environment variables.');
     process.exit(1);
 }
 
-console.log(`YouTube Title Bot starting... will update video ID ${VIDEO_ID_TO_UPDATE} every ${UPDATE_INTERVAL_MS / 1000}s.`);
+console.log(`YouTube Title Bot starting... updating every ${UPDATE_INTERVAL_MS / 1000}s`);
 performUpdate();
 setInterval(performUpdate, UPDATE_INTERVAL_MS);
