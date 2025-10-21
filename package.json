@@ -1,14 +1,12 @@
 {
-  "name": "youtube-title-editor",
+  "name": "youtube-title-bot",
   "version": "1.0.0",
-  "description": "An app to edit a YouTube video title via Render.",
+  "description": "A bot to automatically update a YouTube title with the view count.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "express-session": "^1.17.3",
     "googleapis": "^109.0.1"
   }
 }
