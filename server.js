@@ -62,7 +62,7 @@ async function performUpdate() {
 
         lastStats = { views: formattedViews, likes: formattedLikes, comments: formattedComments };
 
-        const newTitle = `${TITLE_PREFIX}${formattedViews} Views | ${formattedLikes} Likes | ${formattedComments} Comments`;
+        const newTitle = `${TITLE_PREFIX} 🎥 ${formattedViews} Views |👍 ${formattedLikes} Likes | 💬 ${formattedComments} Comments`;
 
         if (title === newTitle) {
             console.log('Title already up-to-date. Skipping update.');
